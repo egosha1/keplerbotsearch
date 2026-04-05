@@ -3,61 +3,62 @@ import time
 import os
 from dotenv import load_dotenv
 
-# Загружаем переменные из файла .env
+# Загружаем переменные
 load_dotenv()
 
-# ===== НАСТРОЙКИ ИЗ ОКРУЖЕНИЯ =====
 TOKEN = os.getenv("BOT_TOKEN")
-# Превращаем строку из .env "id1,id2" в список Python
 RAW_CHATS = os.getenv("CHAT_IDS", "")
 CHAT_IDS = [chat.strip() for chat in RAW_CHATS.split(",") if chat.strip()]
 
 if not TOKEN or not CHAT_IDS:
-    print("ОШИБКА: Токен или CHAT_IDS не найдены в файле .env")
+    print("ОШИБКА: Токен или CHAT_IDS не найдены")
     exit()
 
-# Остальные настройки
+# Настройки
 QUERIES = ["lonsdale", "weekend offender", "alpha industries"]
 MAX_PRICE = 15
 CHECK_INTERVAL = 60 
 GBP_TO_KZT = 565
 
 seen_ids = set()
+# Создаем глобальную сессию
 session = requests.Session()
+iteration_count = 0
 
-def send_photo(caption, photo_url):
-    for chat_id in CHAT_IDS:
-        url = f"https://api.telegram.org/bot{TOKEN}/sendPhoto"
-        data = {
-            "chat_id": chat_id,
-            "caption": caption,
-            "photo": photo_url,
-            "parse_mode": "HTML"
-        }
-        try:
-            requests.post(url, data=data, timeout=10)
-        except Exception as e:
-            print(f"Ошибка отправки пользователю {chat_id}: {e}")
+def get_headers():
+    return {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-GB,en;q=0.9",
+        "Referer": "https://www.vinted.co.uk/",
+        "Origin": "https://www.vinted.co.uk"
+    }
+
+def refresh_session():
+    """Сброс сессии для обхода блокировок по кукам"""
+    global session
+    print("--- Обновление сессии и кук ---")
+    session = requests.Session()
+    try:
+        session.get("https://www.vinted.co.uk/", headers=get_headers(), timeout=15)
+    except:
+        pass
 
 def get_items(query):
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*",
-        "Referer": "https://www.vinted.co.uk/"
-    }
-    if not session.cookies:
-        try:
-            session.get("https://www.vinted.co.uk/", headers=headers, timeout=10)
-        except:
-            return {"items": []}
-
     url = "https://www.vinted.co.uk/api/v2/catalog/items"
-    params = {"search_text": query, "order": "newest_first", "per_page": 10, "currency": "GBP"}
-
+    params = {"search_text": query, "order": "newest_first", "per_page": 15, "currency": "GBP"}
+    
     try:
-        r = session.get(url, params=params, headers=headers, timeout=10)
+        r = session.get(url, params=params, headers=get_headers(), timeout=15)
+        # Если получаем 403 или 401, пробуем обновить куки один раз
+        if r.status_code in [401, 403]:
+            refresh_session()
+            r = session.get(url, params=params, headers=get_headers(), timeout=15)
+            
+        print(f"Поиск {query}: Статус {r.status_code}")
         return r.json() if r.status_code == 200 else {"items": []}
-    except:
+    except Exception as e:
+        print(f"Ошибка запроса: {e}")
         return {"items": []}
 
 def extract_price(item):
@@ -73,21 +74,18 @@ def is_good(item, price):
     if price > MAX_PRICE or price <= 0:
         return False
     title = item.get("title", "").lower()
-    bad_words = ["kids", "fake", "replica", "women", "детск", "девоч"]
+    bad_words = ["kids", "fake", "replica", "women", "детск", "девоч", "girl", "boy"]
     return not any(w in title for w in bad_words)
 
-def format_rating(user):
-    try:
-        count = user.get("feedback_count", 0)
-        if count == 0: return "нет отзывов"
-        return f"{user.get('feedback_reputation', 0) * 5:.1f}⭐️ ({count})"
-    except:
-        return "нет данных"
-
 def check():
-    global seen_ids
+    global seen_ids, iteration_count
+    
+    # Каждые 10 кругов обновляем сессию полностью
+    iteration_count += 1
+    if iteration_count % 10 == 0:
+        refresh_session()
+
     for query in QUERIES:
-        print(f"Поиск: {query}...")
         data = get_items(query)
 
         for item in data.get("items", []):
@@ -105,31 +103,38 @@ def check():
             title = item.get("title", "Без названия")
             url = item.get("url", "")
             photo = item.get("photo", {}).get("url") if item.get("photo") else None
-            rating = format_rating(item.get("user", {}))
-
+            
+            # Собираем текст
             text = (
                 f"🔥 <b>{title}</b>\n"
                 f"💰 <b>{price_gbp} £ (~{price_kzt:,} ₸)</b>\n"
                 f"📏 Размер: <b>{size}</b>\n"
-                f"⭐️ Продавец: {rating}\n"
                 f"🔎 Поиск: {query}\n\n"
                 f"{url}"
-            ).replace(",", " ")
+            )
 
-            if photo:
-                send_photo(text, photo)
-            else:
-                for chat_id in CHAT_IDS:
-                    requests.post(f"https://api.telegram.org/bot{TOKEN}/sendMessage", 
-                                 data={"chat_id": chat_id, "text": text, "parse_mode": "HTML"})
-            time.sleep(1)
-        time.sleep(2)
+            # Отправка
+            for chat_id in CHAT_IDS:
+                try:
+                    if photo:
+                        requests.post(f"https://api.telegram.org/bot{TOKEN}/sendPhoto", 
+                                     data={"chat_id": chat_id, "caption": text, "photo": photo, "parse_mode": "HTML"}, timeout=10)
+                    else:
+                        requests.post(f"https://api.telegram.org/bot{TOKEN}/sendMessage", 
+                                     data={"chat_id": chat_id, "text": text, "parse_mode": "HTML"}, timeout=10)
+                except:
+                    pass
+            time.sleep(1) # Пауза между отправками, чтобы ТГ не забанил
+        time.sleep(2) # Пауза между брендами
 
-print("Бот запущен. Секреты загружены из .env")
-while True:
-    try:
-        check()
-        time.sleep(CHECK_INTERVAL)
-    except Exception as e:
-        print("Ошибка:", e)
-        time.sleep(10)
+# СТАРТ
+if __name__ == "__main__":
+    print("=== БОТ ЗАПУЩЕН НА RAILWAY 24/7 ===")
+    refresh_session() # Начальная инициализация кук
+    while True:
+        try:
+            check()
+            time.sleep(CHECK_INTERVAL)
+        except Exception as e:
+            print(f"Критическая ошибка: {e}")
+            time.sleep(20)
