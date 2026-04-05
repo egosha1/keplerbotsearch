@@ -74,7 +74,7 @@ def is_good(item, price):
     if price > MAX_PRICE or price <= 0:
         return False
     title = item.get("title", "").lower()
-    bad_words = ["kids", "fake", "replica", "women", "детск", "девоч", "girl", "boy"]
+    bad_words = ["kids", "fake", "replica", "детск", "девоч", "girl", "boy", "book"]
     return not any(w in title for w in bad_words)
 
 def check():
