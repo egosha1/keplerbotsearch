@@ -15,7 +15,7 @@ if not TOKEN or not CHAT_IDS:
     exit()
 
 # Настройки
-QUERIES = ["lonsdale", "weekend offender", "alpha industries"]
+QUERIES = ["lonsdale", "weekend offender", "alpha industries""peaceful hooligan", "ellesse", "carhartt", "pit bull germany", "thor steinar", "doberman aggressive", "hardcore united"]
 MAX_PRICE = 15
 CHECK_INTERVAL = 60 
 GBP_TO_KZT = 565
